@@ -16,62 +16,28 @@ async function requestJson(url, init = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
   }, timeoutMs);
 }
 
-function instaboxHeaders(env, includeJson = false) {
-  const headers = {
-    Accept: "application/json",
-    "X-API-Key": env.INSTABOX_API_KEY,
-  };
-  if (includeJson) headers["Content-Type"] = "application/json";
-  return headers;
-}
-
 async function checkAndRecover(env) {
   const machineName = env.INSTABOX_MACHINE_NAME || "s";
-  const apiBase = (env.INSTABOX_API_BASE_URL || "https://api.instabox.sh").replace(/\/$/, "");
-  const renderUrl = (env.RENDER_WATCHDOG_URL || "https://instabox-24-7-watchdog.onrender.com/healthz").replace(/\/$/, "");
+  const renderUrl = (env.RENDER_STATUS_URL || "https://instabox-24-7-watchdog.onrender.com/status").replace(/\/$/, "");
   const startedAt = Date.now();
   const result = { checkedAt: new Date().toISOString(), machine: machineName, actions: [] };
 
-  // This request wakes a sleeping Render Free web service.
+  // This request wakes a sleeping Render Free web service and asks its watchdog
+  // to check the Instabox machine using the Instabox key kept only in Render.
   try {
-    const render = await requestJson(renderUrl);
+    const headers = { Accept: "application/json" };
+    if (env.RENDER_STATUS_TOKEN) headers.Authorization = `Bearer ${env.RENDER_STATUS_TOKEN}`;
+    const render = await requestJson(renderUrl, { headers });
     result.render = { ok: render.ok, status: render.status };
+    result.instabox = render.body?.ok ? {
+      ok: true,
+      state: render.body.state || "unknown",
+      runtime_ready: Boolean(render.body.runtime_ready),
+    } : { ok: false, error: "render_status_failed" };
     if (!render.ok) result.actions.push("render_health_failed");
   } catch (error) {
     result.render = { ok: false, error: error.name === "AbortError" ? "timeout" : "request_failed" };
     result.actions.push("render_health_failed");
-  }
-
-  if (!env.INSTABOX_API_KEY) {
-    result.instabox = { ok: false, error: "INSTABOX_API_KEY_not_configured" };
-    result.actions.push("instabox_check_skipped");
-    return { ...result, durationMs: Date.now() - startedAt };
-  }
-
-  try {
-    const machine = await requestJson(
-      `${apiBase}/v1/machines/${encodeURIComponent(machineName)}`,
-      { headers: instaboxHeaders(env) },
-    );
-    const state = machine.body?.state || "unknown";
-    result.instabox = { ok: machine.ok, status: machine.status, state };
-
-    if (machine.ok && (state === "paused" || state === "suspended")) {
-      const resumed = await requestJson(
-        `${apiBase}/v1/machines/${encodeURIComponent(machineName)}/resume`,
-        { method: "POST", headers: instaboxHeaders(env, true), body: "{}" },
-      );
-      result.actions.push(resumed.ok ? "resume_requested" : "resume_failed");
-    } else if (machine.ok && state === "stopped" && env.AUTO_START_STOPPED === "true") {
-      const started = await requestJson(
-        `${apiBase}/v1/machines/${encodeURIComponent(machineName)}/start`,
-        { method: "POST", headers: instaboxHeaders(env, true), body: "{}" },
-      );
-      result.actions.push(started.ok ? "start_requested" : "start_failed");
-    }
-  } catch (error) {
-    result.instabox = { ok: false, error: error.name === "AbortError" ? "timeout" : "request_failed" };
-    result.actions.push("instabox_check_failed");
   }
 
   return { ...result, durationMs: Date.now() - startedAt };

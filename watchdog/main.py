@@ -37,6 +37,7 @@ PROGRESS_MAX_AGE = int(env("PROGRESS_MAX_AGE_SECONDS", "1800"))
 STATE_DIR = Path(env("STATE_DIR", "./state"))
 PROGRESS_FILE = Path(env("PROGRESS_FILE", str(STATE_DIR / "progress.json")))
 PORT = int(env("PORT", "10000"))
+STATUS_TOKEN = env("WATCHDOG_STATUS_TOKEN")
 
 
 def now() -> str:
@@ -157,6 +158,30 @@ def stop_handler(_signum: int, _frame: object) -> None:
 
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
+        if self.path == "/status":
+            if not STATUS_TOKEN or self.headers.get("Authorization") != f"Bearer {STATUS_TOKEN}":
+                self.send_response(401)
+                self.end_headers()
+                return
+            try:
+                machine = get_machine()
+                body = json.dumps({
+                    "ok": True,
+                    "service": "instabox-watchdog",
+                    "machine": machine_target(),
+                    "state": machine.get("state", "unknown"),
+                    "runtime_ready": bool(machine.get("runtime", {}).get("ready", False)),
+                }).encode()
+                status = 200
+            except Exception as exc:  # pragma: no cover - runtime API errors
+                body = json.dumps({"ok": False, "service": "instabox-watchdog", "error": type(exc).__name__}).encode()
+                status = 503
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path not in {"/", "/healthz"}:
             self.send_response(404)
             self.end_headers()

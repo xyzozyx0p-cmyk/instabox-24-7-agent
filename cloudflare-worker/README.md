@@ -1,17 +1,17 @@
 # Instabox third watchdog on Cloudflare Workers
 
-This Worker runs every five minutes using a Cloudflare Cron Trigger. It wakes the Render watchdog with an HTTP request, reads the Instabox machine named `s`, and requests `resume` for paused/suspended machines. It requests `start` for a stopped machine only when `AUTO_START_STOPPED=true`.
+This Worker runs every five minutes using a Cloudflare Cron Trigger. It wakes the Render watchdog with an HTTP request and reads the status of the Instabox machine named `s` through Render. Render keeps the Instabox API key; Cloudflare does not need that key.
 
 ## Secrets
 
 Configure these as Cloudflare Worker secrets; do not commit them:
 
 ```bash
-npx wrangler secret put INSTABOX_API_KEY
+npx wrangler secret put RENDER_STATUS_TOKEN
 npx wrangler secret put WORKER_AUTH_TOKEN
 ```
 
-`WORKER_AUTH_TOKEN` protects the optional `/healthz` endpoint. The scheduled handler does not require it.
+Only `RENDER_STATUS_TOKEN` and the optional `WORKER_AUTH_TOKEN` are used by the Worker. `INSTABOX_API_KEY` is no longer required in Cloudflare and should not be added there. `RENDER_STATUS_TOKEN` must match the protected Render `/status` endpoint. `WORKER_AUTH_TOKEN` protects the optional Worker `/healthz` endpoint. The scheduled handler does not require it.
 
 ## Deploy
 

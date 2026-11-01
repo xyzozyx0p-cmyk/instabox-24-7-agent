@@ -6,10 +6,8 @@ compatibility_date = "2026-11-01"
 crons = ["*/5 * * * *"]
 
 [vars]
-INSTABOX_API_BASE_URL = "https://api.instabox.sh"
 INSTABOX_MACHINE_NAME = "s"
-RENDER_WATCHDOG_URL = "https://instabox-24-7-watchdog.onrender.com/healthz"
-AUTO_START_STOPPED = "true"
+RENDER_STATUS_URL = "https://instabox-24-7-watchdog.onrender.com/status"
 
 [observability]
 enabled = true
