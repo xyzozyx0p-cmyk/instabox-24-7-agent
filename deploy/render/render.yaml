@@ -1,0 +1,25 @@
+services:
+  - type: worker
+    name: instabox-24-7-watchdog
+    runtime: python
+    plan: starter
+    buildCommand: ""
+    startCommand: "python3 watchdog/main.py"
+    autoDeploy: true
+    envVars:
+      - key: INSTABOX_API_KEY
+        sync: false
+      - key: INSTABOX_MACHINE_ID
+        sync: false
+      - key: INSTABOX_API_BASE_URL
+        value: https://api.instabox.sh
+      - key: WATCHDOG_INTERVAL_SECONDS
+        value: "300"
+      - key: API_TIMEOUT_SECONDS
+        value: "20"
+      - key: PROGRESS_MAX_AGE_SECONDS
+        value: "1800"
+      - key: PROGRESS_FILE
+        value: /var/lib/instabox-watchdog/progress.json
+      - key: STATE_DIR
+        value: /var/lib/instabox-watchdog
