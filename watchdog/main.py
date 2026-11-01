@@ -10,9 +10,11 @@ import signal
 import sys
 import time
 import argparse
+import threading
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 STOP = False
@@ -26,13 +28,14 @@ def env(name: str, default: str | None = None, required: bool = False) -> str:
 
 
 BASE = env("INSTABOX_API_BASE_URL", "https://api.instabox.sh").rstrip("/")
-API_KEY = env("INSTABOX_API_KEY", required=True)
-MACHINE_ID = env("INSTABOX_MACHINE_ID", required=True)
+API_KEY = env("INSTABOX_API_KEY")
+MACHINE_ID = env("INSTABOX_MACHINE_ID")
 INTERVAL = int(env("WATCHDOG_INTERVAL_SECONDS", "300"))
 TIMEOUT = int(env("API_TIMEOUT_SECONDS", "20"))
 PROGRESS_MAX_AGE = int(env("PROGRESS_MAX_AGE_SECONDS", "1800"))
 STATE_DIR = Path(env("STATE_DIR", "./state"))
 PROGRESS_FILE = Path(env("PROGRESS_FILE", str(STATE_DIR / "progress.json")))
+PORT = int(env("PORT", "10000"))
 
 
 def now() -> str:
@@ -61,6 +64,8 @@ def request(method: str, path: str, body: dict | None = None) -> dict:
 
 
 def get_machine() -> dict:
+    if not API_KEY or not MACHINE_ID:
+        raise RuntimeError("INSTABOX_API_KEY and INSTABOX_MACHINE_ID are not configured")
     return request("GET", f"/v1/machines/{MACHINE_ID}")
 
 
@@ -142,6 +147,29 @@ def stop_handler(_signum: int, _frame: object) -> None:
     STOP = True
 
 
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:  # noqa: N802
+        if self.path not in {"/", "/healthz"}:
+            self.send_response(404)
+            self.end_headers()
+            return
+        body = json.dumps({"ok": True, "service": "instabox-watchdog", "configured": bool(API_KEY and MACHINE_ID)}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        return
+
+
+def start_health_server() -> ThreadingHTTPServer:
+    server = ThreadingHTTPServer(("0.0.0.0", PORT), HealthHandler)
+    threading.Thread(target=server.serve_forever, name="health-server", daemon=True).start()
+    return server
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="InstaBox liveness and lifecycle watchdog")
     parser.add_argument("action", nargs="?", choices=["monitor", "resume", "start", "stop", "suspend", "restart"], default="monitor")
@@ -149,8 +177,12 @@ def main() -> int:
     signal.signal(signal.SIGTERM, stop_handler)
     signal.signal(signal.SIGINT, stop_handler)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    health_server = start_health_server()
     if args.action != "monitor":
-        return control(args.action)
+        try:
+            return control(args.action)
+        finally:
+            health_server.shutdown()
     logging.info("starting watchdog interval=%ss machine=%s", INTERVAL, MACHINE_ID)
     while not STOP:
         try:
