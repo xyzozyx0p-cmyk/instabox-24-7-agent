@@ -30,6 +30,7 @@ def env(name: str, default: str | None = None, required: bool = False) -> str:
 BASE = env("INSTABOX_API_BASE_URL", "https://api.instabox.sh").rstrip("/")
 API_KEY = env("INSTABOX_API_KEY")
 MACHINE_ID = env("INSTABOX_MACHINE_ID")
+MACHINE_NAME = env("INSTABOX_MACHINE_NAME")
 INTERVAL = int(env("WATCHDOG_INTERVAL_SECONDS", "300"))
 TIMEOUT = int(env("API_TIMEOUT_SECONDS", "20"))
 PROGRESS_MAX_AGE = int(env("PROGRESS_MAX_AGE_SECONDS", "1800"))
@@ -63,26 +64,33 @@ def request(method: str, path: str, body: dict | None = None) -> dict:
         return json.loads(raw) if raw else {}
 
 
+def machine_target() -> str:
+    target = MACHINE_ID or MACHINE_NAME
+    if not target:
+        raise RuntimeError("one of INSTABOX_MACHINE_NAME or INSTABOX_MACHINE_ID is required")
+    return target
+
+
 def get_machine() -> dict:
-    if not API_KEY or not MACHINE_ID:
-        raise RuntimeError("INSTABOX_API_KEY and INSTABOX_MACHINE_ID are not configured")
-    return request("GET", f"/v1/machines/{MACHINE_ID}")
+    if not API_KEY or not machine_target():
+        raise RuntimeError("INSTABOX_API_KEY and one of INSTABOX_MACHINE_NAME or INSTABOX_MACHINE_ID are not configured")
+    return request("GET", f"/v1/machines/{machine_target()}")
 
 
 def resume_machine() -> dict:
-    return request("POST", f"/v1/machines/{MACHINE_ID}/resume", {})
+    return request("POST", f"/v1/machines/{machine_target()}/resume", {})
 
 
 def start_machine() -> dict:
-    return request("POST", f"/v1/machines/{MACHINE_ID}/start", {})
+    return request("POST", f"/v1/machines/{machine_target()}/start", {})
 
 
 def stop_machine() -> dict:
-    return request("POST", f"/v1/machines/{MACHINE_ID}/stop", {})
+    return request("POST", f"/v1/machines/{machine_target()}/stop", {})
 
 
 def suspend_machine() -> dict:
-    return request("POST", f"/v1/machines/{MACHINE_ID}/suspend", {})
+    return request("POST", f"/v1/machines/{machine_target()}/suspend", {})
 
 
 def control(action: str) -> int:
@@ -123,7 +131,7 @@ def progress_age() -> float | None:
 def check_once() -> None:
     machine = get_machine()
     state = machine.get("state", "unknown")
-    logging.info("machine=%s state=%s", MACHINE_ID, state)
+    logging.info("machine=%s state=%s", machine_target(), state)
     save_event({"kind": "liveness", "state": state})
 
     if str(state).lower() == "paused":
@@ -153,7 +161,7 @@ class HealthHandler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
             return
-        body = json.dumps({"ok": True, "service": "instabox-watchdog", "configured": bool(API_KEY and MACHINE_ID)}).encode()
+        body = json.dumps({"ok": True, "service": "instabox-watchdog", "configured": bool(API_KEY and (MACHINE_ID or MACHINE_NAME))}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -183,7 +191,7 @@ def main() -> int:
             return control(args.action)
         finally:
             health_server.shutdown()
-    logging.info("starting watchdog interval=%ss machine=%s", INTERVAL, MACHINE_ID)
+    logging.info("starting watchdog interval=%ss machine=%s", INTERVAL, MACHINE_ID or MACHINE_NAME)
     while not STOP:
         try:
             check_once()

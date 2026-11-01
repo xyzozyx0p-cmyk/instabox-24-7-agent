@@ -21,7 +21,8 @@
 ## Переменные окружения
 
 - `INSTABOX_API_KEY` — API key с минимальными scope;
-- `INSTABOX_MACHINE_ID` — ID основной машины;
+- `INSTABOX_MACHINE_NAME` — имя основной машины из dashboard; Instabox API принимает имя в URL так же, как внутренний ID;
+- `INSTABOX_MACHINE_ID` — внутренний ID машины, необязательный альтернативный вариант;
 - `WATCHDOG_INTERVAL_SECONDS` — интервал, по умолчанию 300;
 - `API_TIMEOUT_SECONDS` — HTTP timeout, по умолчанию 20;
 - `PROGRESS_MAX_AGE_SECONDS` — допустимый возраст progress heartbeat, по умолчанию 1800;
@@ -52,4 +53,4 @@ python3 watchdog/main.py restart  # stop -> ожидание -> start, толь�
 
 ## Следующий этап
 
-После получения ID машины и подтверждения тарифа можно подключить Render service, secrets, alerting и реальную стратегию checkpoints. Запуск Claude Code намеренно не включён в этот первый безопасный этап.
+После получения имени машины и подтверждения тарифа можно подключить Render service, secrets, alerting и реальную стратегию checkpoints. Запуск Claude Code намеренно не включён в этот первый безопасный этап.
