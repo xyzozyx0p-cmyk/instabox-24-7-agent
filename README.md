@@ -26,7 +26,9 @@
 - `API_TIMEOUT_SECONDS` — HTTP timeout, по умолчанию 20;
 - `PROGRESS_MAX_AGE_SECONDS` — допустимый возраст progress heartbeat, по умолчанию 1800;
 - `PROGRESS_FILE` — путь к файлу, который обновляет рабочий агент;
-- `STATE_DIR` — каталог состояния и event log.
+- `STATE_DIR` — каталог состояния и event log;
+- `ALLOW_DESTRUCTIVE_ACTIONS` — должен быть `true` только для ручных `stop`, `suspend` или `restart`;
+- `CONTROL_WAIT_SECONDS` — сколько ждать завершения stop перед restart.
 
 ## Локальный запуск
 
@@ -35,6 +37,18 @@ cp .env.example .env
 # заполните .env
 python3 watchdog/main.py
 ```
+
+Одноразовые lifecycle-команды используют тот же API-ключ и ID машины:
+
+```bash
+python3 watchdog/main.py resume   # разбудить paused-машину
+python3 watchdog/main.py start    # запустить stopped-машину
+python3 watchdog/main.py stop     # только при ALLOW_DESTRUCTIVE_ACTIONS=true
+python3 watchdog/main.py suspend  # только при ALLOW_DESTRUCTIVE_ACTIONS=true
+python3 watchdog/main.py restart  # stop -> ожидание -> start, только явно разрешённая операция
+```
+
+На бесплатном плане API позволяет выполнять lifecycle-операции, но `auto-pause` остаётся фиксированным на 30 мин. Нельзя отключить его через API. Поэтому `monitor` периодически проверяет состояние и вызывает `resume`, если машина уснула.
 
 ## Следующий этап
 

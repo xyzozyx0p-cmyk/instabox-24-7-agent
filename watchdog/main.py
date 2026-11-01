@@ -9,6 +9,7 @@ import secrets
 import signal
 import sys
 import time
+import argparse
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -67,6 +68,44 @@ def resume_machine() -> dict:
     return request("POST", f"/v1/machines/{MACHINE_ID}/resume", {})
 
 
+def start_machine() -> dict:
+    return request("POST", f"/v1/machines/{MACHINE_ID}/start", {})
+
+
+def stop_machine() -> dict:
+    return request("POST", f"/v1/machines/{MACHINE_ID}/stop", {})
+
+
+def suspend_machine() -> dict:
+    return request("POST", f"/v1/machines/{MACHINE_ID}/suspend", {})
+
+
+def control(action: str) -> int:
+    if action in {"stop", "suspend", "restart"} and env("ALLOW_DESTRUCTIVE_ACTIONS", "false").lower() != "true":
+        raise RuntimeError("destructive action blocked; set ALLOW_DESTRUCTIVE_ACTIONS=true explicitly")
+    actions = {
+        "resume": resume_machine,
+        "start": start_machine,
+        "stop": stop_machine,
+        "suspend": suspend_machine,
+    }
+    if action == "restart":
+        result = stop_machine()
+        save_event({"kind": "control", "action": "stop", "result": result})
+        deadline = time.time() + int(env("CONTROL_WAIT_SECONDS", "120"))
+        while time.time() < deadline:
+            state = str(get_machine().get("state", "unknown")).lower()
+            if state in {"stopped", "paused"}:
+                break
+            time.sleep(3)
+        result = start_machine()
+    else:
+        result = actions[action]()
+    save_event({"kind": "control", "action": action, "result": result})
+    logging.info("control action=%s completed", action)
+    return 0
+
+
 def progress_age() -> float | None:
     try:
         data = json.loads(PROGRESS_FILE.read_text(encoding="utf-8"))
@@ -104,9 +143,14 @@ def stop_handler(_signum: int, _frame: object) -> None:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="InstaBox liveness and lifecycle watchdog")
+    parser.add_argument("action", nargs="?", choices=["monitor", "resume", "start", "stop", "suspend", "restart"], default="monitor")
+    args = parser.parse_args()
     signal.signal(signal.SIGTERM, stop_handler)
     signal.signal(signal.SIGINT, stop_handler)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    if args.action != "monitor":
+        return control(args.action)
     logging.info("starting watchdog interval=%ss machine=%s", INTERVAL, MACHINE_ID)
     while not STOP:
         try:
