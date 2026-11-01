@@ -1,0 +1,15 @@
+name = "instabox-third-watchdog"
+main = "worker.js"
+compatibility_date = "2026-11-01"
+
+[triggers]
+crons = ["*/5 * * * *"]
+
+[vars]
+INSTABOX_API_BASE_URL = "https://api.instabox.sh"
+INSTABOX_MACHINE_NAME = "s"
+RENDER_WATCHDOG_URL = "https://instabox-24-7-watchdog.onrender.com/healthz"
+AUTO_START_STOPPED = "true"
+
+[observability]
+enabled = true
