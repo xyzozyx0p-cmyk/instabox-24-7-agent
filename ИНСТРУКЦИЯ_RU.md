@@ -119,6 +119,64 @@ curl "$API_URL/healthz"
 
 `/healthz` показывает только, что API работает. Для управления всегда нужен токен.
 
+## Передача файлов через API
+
+Файлы можно загружать и скачивать в любом формате: ZIP, PDF, DOCX, XLSX, изображения, видео, исходный код и другие типы.
+
+Для безопасности API разрешает операции только внутри:
+
+```text
+/data/workspace
+```
+
+Нельзя через API прочитать или перезаписать системные файлы за пределами workspace. Пути с `..` также отклоняются.
+
+### Список файлов
+
+Список корня workspace:
+
+```bash
+curl "$API_URL/v1/files?path=" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Список конкретного проекта:
+
+```bash
+curl "$API_URL/v1/files?path=instabox-24-7-agent" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Загрузка файла на сервер
+
+```bash
+curl -X POST "$API_URL/v1/files/upload" \
+  -H "Authorization: Bearer $TOKEN" \
+  -F path=instabox-24-7-agent/input.zip \
+  -F file=@./input.zip
+```
+
+Пример загрузки изображения:
+
+```bash
+curl -X POST "$API_URL/v1/files/upload" \
+  -H "Authorization: Bearer $TOKEN" \
+  -F path=instabox-24-7-agent/assets/photo.png \
+  -F file=@./photo.png
+```
+
+Каталоги создаются автоматически. Если файл с таким путём уже существует, он будет заменён.
+
+### Скачивание файла с сервера
+
+```bash
+curl "$API_URL/v1/files/download?path=instabox-24-7-agent/output.zip" \
+  -H "Authorization: Bearer $TOKEN" \
+  -o output.zip
+```
+
+Все файловые запросы требуют тот же Bearer-токен, что и управление Claude.
+
 ## 6. Запуск Claude Code
 
 Запустить persistent-сессию Claude:

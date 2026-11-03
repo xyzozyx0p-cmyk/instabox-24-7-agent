@@ -12,8 +12,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
@@ -68,6 +68,14 @@ def safe_cwd(cwd: str | None) -> str:
     if not candidate.exists() or not candidate.is_dir():
         raise HTTPException(status_code=400, detail="cwd does not exist")
     return str(candidate)
+
+
+def safe_file_path(relative_path: str) -> Path:
+    candidate = (WORKSPACE / relative_path).resolve()
+    workspace = WORKSPACE.resolve()
+    if candidate != workspace and workspace not in candidate.parents:
+        raise HTTPException(status_code=400, detail="path must be under CONTROL_WORKSPACE")
+    return candidate
 
 
 def tmux(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -147,6 +155,47 @@ async def status() -> dict[str, Any]:
         "sessions": sessions,
         "claude_installed": Path(os.path.expanduser("~/.local/bin/claude")).exists(),
     }
+
+
+@APP.get("/v1/files", dependencies=[Depends(require_token)])
+async def list_files(path: str = "") -> dict[str, Any]:
+    directory = safe_file_path(path)
+    if not directory.exists() or not directory.is_dir():
+        raise HTTPException(status_code=404, detail="directory not found")
+    entries = []
+    for item in sorted(directory.iterdir(), key=lambda value: value.name.lower()):
+        entries.append({
+            "name": item.name,
+            "path": str(item.relative_to(WORKSPACE)),
+            "type": "directory" if item.is_dir() else "file",
+            "size": item.stat().st_size if item.is_file() else None,
+        })
+    return {"ok": True, "path": path, "entries": entries}
+
+
+@APP.post("/v1/files/upload", dependencies=[Depends(require_token)])
+async def upload_file(path: str = Form(...), file: UploadFile = File(...)) -> dict[str, Any]:
+    target = safe_file_path(path)
+    if target == WORKSPACE.resolve():
+        raise HTTPException(status_code=400, detail="file path is required")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    size = 0
+    try:
+        with target.open("wb") as output:
+            while chunk := await file.read(1024 * 1024):
+                output.write(chunk)
+                size += len(chunk)
+    finally:
+        await file.close()
+    return {"ok": True, "path": str(target.relative_to(WORKSPACE)), "size": size}
+
+
+@APP.get("/v1/files/download", dependencies=[Depends(require_token)])
+async def download_file(path: str) -> FileResponse:
+    target = safe_file_path(path)
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="file not found")
+    return FileResponse(target, filename=target.name, media_type="application/octet-stream")
 
 
 @APP.post("/v1/sessions", dependencies=[Depends(require_token)])
