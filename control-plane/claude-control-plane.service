@@ -1,0 +1,19 @@
+[Unit]
+Description=Claude Code control plane API
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=user
+Group=user
+WorkingDirectory=/data/infra/control-plane
+EnvironmentFile=/data/infra/control-plane/api.env
+ExecStart=/data/infra/control-plane/venv/bin/uvicorn control_plane:APP --host 127.0.0.1 --port 8787
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

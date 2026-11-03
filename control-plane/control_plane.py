@@ -1,0 +1,247 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import re
+import secrets
+import select
+import subprocess
+import time
+from pathlib import Path
+from typing import Any
+
+from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel, Field
+
+APP = FastAPI(title="Claude Control Plane", version="0.1.0")
+BEARER = HTTPBearer(auto_error=False)
+TOKEN = os.environ.get("CONTROL_API_TOKEN", "")
+WORKSPACE = Path(os.environ.get("CONTROL_WORKSPACE", "/data/workspace"))
+DEFAULT_PROJECT = os.environ.get("CONTROL_PROJECT", str(WORKSPACE / "instabox-24-7-agent"))
+MAX_MESSAGE = 32_000
+SESSION_RE = re.compile(r"^[a-zA-Z0-9_-]{1,48}$")
+
+
+class MessageRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=MAX_MESSAGE)
+    session: str = Field(default="claude", pattern=r"^[a-zA-Z0-9_-]{1,48}$")
+    cwd: str | None = None
+
+
+class CommandRequest(BaseModel):
+    command: str = Field(min_length=1, max_length=16_000)
+    session: str = Field(default="claude", pattern=r"^[a-zA-Z0-9_-]{1,48}$")
+
+
+class SessionRequest(BaseModel):
+    session: str = Field(default="terminal", pattern=r"^[a-zA-Z0-9_-]{1,48}$")
+    cwd: str | None = None
+
+
+def require_token(credentials: HTTPAuthorizationCredentials | None = Depends(BEARER)) -> None:
+    if not TOKEN or credentials is None or not secrets.compare_digest(credentials.credentials, TOKEN):
+        raise HTTPException(status_code=401, detail="unauthorized")
+
+
+def check_token(value: str | None) -> None:
+    if not TOKEN or not value or not secrets.compare_digest(value, TOKEN):
+        raise HTTPException(status_code=401, detail="unauthorized")
+
+
+def validate_session(name: str) -> str:
+    if not SESSION_RE.fullmatch(name):
+        raise HTTPException(status_code=400, detail="invalid session name")
+    return name
+
+
+def safe_cwd(cwd: str | None) -> str:
+    candidate = Path(cwd or DEFAULT_PROJECT).expanduser().resolve()
+    workspace = WORKSPACE.resolve()
+    if candidate != workspace and workspace not in candidate.parents:
+        raise HTTPException(status_code=400, detail="cwd must be under CONTROL_WORKSPACE")
+    if not candidate.exists() or not candidate.is_dir():
+        raise HTTPException(status_code=400, detail="cwd does not exist")
+    return str(candidate)
+
+
+def tmux(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(["/usr/bin/tmux", *args], text=True, capture_output=True, check=check, timeout=15)
+
+
+def has_session(name: str) -> bool:
+    return tmux("has-session", "-t", name, check=False).returncode == 0
+
+
+def create_session(name: str, cwd: str) -> None:
+    validate_session(name)
+    if not has_session(name):
+        tmux("new-session", "-d", "-s", name, "-c", cwd, "bash")
+
+
+def send_keys(name: str, text: str) -> None:
+    validate_session(name)
+    if not has_session(name):
+        raise HTTPException(status_code=404, detail="session not found")
+    # -l sends literal text, avoiding tmux key-name interpretation.
+    tmux("send-keys", "-t", name, "-l", text)
+    tmux("send-keys", "-t", name, "Enter")
+
+
+def capture(name: str, lines: int = 300) -> str:
+    validate_session(name)
+    if not has_session(name):
+        raise HTTPException(status_code=404, detail="session not found")
+    result = tmux("capture-pane", "-p", "-S", f"-{max(1, min(lines, 2000))}", "-t", name)
+    return result.stdout
+
+
+@APP.get("/healthz")
+async def healthz() -> dict[str, Any]:
+    return {"ok": True, "service": "claude-control-plane"}
+
+
+@APP.get("/v1/status", dependencies=[Depends(require_token)])
+async def status() -> dict[str, Any]:
+    result = tmux("list-sessions", "-F", "#{session_name}", check=False)
+    sessions = [s for s in result.stdout.splitlines() if s]
+    return {
+        "ok": True,
+        "workspace": str(WORKSPACE),
+        "default_project": DEFAULT_PROJECT,
+        "sessions": sessions,
+        "claude_installed": Path(os.path.expanduser("~/.local/bin/claude")).exists(),
+    }
+
+
+@APP.post("/v1/sessions", dependencies=[Depends(require_token)])
+async def create_terminal(request: SessionRequest) -> dict[str, Any]:
+    session = validate_session(request.session)
+    cwd = safe_cwd(request.cwd)
+    create_session(session, cwd)
+    return {"ok": True, "session": session, "cwd": cwd}
+
+
+@APP.post("/v1/claude/start", dependencies=[Depends(require_token)])
+async def start_claude(request: SessionRequest | None = None) -> dict[str, Any]:
+    request = request or SessionRequest(session="claude")
+    session = validate_session(request.session or "claude")
+    cwd = safe_cwd(request.cwd)
+    create_session(session, cwd)
+    if not has_claude_process(session):
+        tmux("send-keys", "-t", session, "-l", "claude")
+        tmux("send-keys", "-t", session, "Enter")
+    return {"ok": True, "session": session, "cwd": cwd, "output": capture(session, 80)}
+
+
+def has_claude_process(session: str) -> bool:
+    result = tmux("list-panes", "-t", session, "-F", "#{pane_current_command}", check=False)
+    return any("claude" in item.lower() for item in result.stdout.splitlines())
+
+
+@APP.post("/v1/claude/message", dependencies=[Depends(require_token)])
+async def claude_message(request: MessageRequest) -> dict[str, Any]:
+    session = validate_session(request.session)
+    cwd = safe_cwd(request.cwd)
+    create_session(session, cwd)
+    if not has_claude_process(session):
+        tmux("send-keys", "-t", session, "-l", "claude")
+        tmux("send-keys", "-t", session, "Enter")
+        await asyncio.sleep(2)
+    send_keys(session, request.message)
+    return {"ok": True, "session": session, "accepted_at": time.time()}
+
+
+@APP.get("/v1/claude/output", dependencies=[Depends(require_token)])
+async def claude_output(session: str = "claude", lines: int = 300) -> dict[str, Any]:
+    return {"ok": True, "session": validate_session(session), "output": capture(session, lines)}
+
+
+@APP.post("/v1/command", dependencies=[Depends(require_token)])
+async def command(request: CommandRequest) -> dict[str, Any]:
+    send_keys(validate_session(request.session), request.command)
+    return {"ok": True, "session": request.session, "accepted_at": time.time()}
+
+
+async def ws_auth(websocket: WebSocket) -> None:
+    query_token = websocket.query_params.get("token")
+    if query_token and TOKEN and secrets.compare_digest(query_token, TOKEN):
+        await websocket.accept()
+        return
+    await websocket.accept()
+    try:
+        raw = await asyncio.wait_for(websocket.receive_text(), timeout=10)
+        data = json.loads(raw)
+        if not TOKEN or not secrets.compare_digest(str(data.get("token", "")), TOKEN):
+            await websocket.close(code=4401)
+            raise WebSocketDisconnect(code=4401)
+    except Exception:
+        await websocket.close(code=4401)
+        raise WebSocketDisconnect(code=4401)
+
+
+@APP.websocket("/v1/sessions/{session}/ws")
+async def terminal_ws(websocket: WebSocket, session: str) -> None:
+    validate_session(session)
+    await ws_auth(websocket)
+    if websocket.client_state.name != "CONNECTED":
+        return
+    if not has_session(session):
+        await websocket.close(code=4404)
+        return
+
+    master, slave = os.openpty()
+    process = subprocess.Popen(
+        ["/usr/bin/tmux", "attach-session", "-t", session],
+        stdin=slave,
+        stdout=slave,
+        stderr=slave,
+        close_fds=True,
+        start_new_session=True,
+    )
+    os.close(slave)
+    os.set_blocking(master, False)
+
+    async def reader() -> None:
+        while True:
+            ready, _, _ = await asyncio.to_thread(select.select, [master], [], [], 1.0)
+            if not ready:
+                if process.poll() is not None:
+                    return
+                continue
+            try:
+                data = os.read(master, 8192)
+            except (BlockingIOError, OSError):
+                return
+            if not data:
+                return
+            await websocket.send_bytes(data)
+
+    async def writer() -> None:
+        while True:
+            message = await websocket.receive()
+            if message.get("type") == "websocket.disconnect":
+                return
+            data = message.get("bytes")
+            if data is None and message.get("text") is not None:
+                data = message["text"].encode()
+            if data:
+                os.write(master, data)
+
+    try:
+        await asyncio.gather(reader(), writer())
+    except (WebSocketDisconnect, RuntimeError, OSError):
+        pass
+    finally:
+        try:
+            process.terminate()
+        except ProcessLookupError:
+            pass
+        os.close(master)
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(APP, host="127.0.0.1", port=int(os.environ.get("CONTROL_PORT", "8787")))
