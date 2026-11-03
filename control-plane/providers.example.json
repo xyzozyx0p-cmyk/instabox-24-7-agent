@@ -1,0 +1,40 @@
+{
+  "providers": [
+    {
+      "name": "reformboss",
+      "protocol": "openai",
+      "api_base": "https://api.reformboss.com/v1",
+      "env_key": "REFORMBOSS_API_KEY",
+      "models": [
+        {
+          "id": "glm-5.3-prime",
+          "alias": "reformboss-glm-5.3-prime"
+        }
+      ]
+    },
+    {
+      "name": "anthropic",
+      "protocol": "anthropic",
+      "api_base": "https://api.anthropic.com",
+      "env_key": "ANTHROPIC_PROVIDER_API_KEY",
+      "models": [
+        {
+          "id": "claude-sonnet-4-5",
+          "alias": "anthropic-claude-sonnet-4-5"
+        }
+      ]
+    },
+    {
+      "name": "openai",
+      "protocol": "openai",
+      "api_base": "https://api.openai.com/v1",
+      "env_key": "OPENAI_PROVIDER_API_KEY",
+      "models": [
+        {
+          "id": "gpt-4o",
+          "alias": "openai-gpt-4o"
+        }
+      ]
+    }
+  ]
+}

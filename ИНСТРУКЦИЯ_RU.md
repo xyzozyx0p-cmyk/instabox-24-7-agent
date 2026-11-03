@@ -177,6 +177,98 @@ curl "$API_URL/v1/files/download?path=instabox-24-7-agent/output.zip" \
 
 Все файловые запросы требуют тот же Bearer-токен, что и управление Claude.
 
+## Провайдеры и список моделей
+
+LiteLLM использует стандартные форматы:
+
+- `anthropic/<model>` для Anthropic;
+- `openai/<model>` для OpenAI и OpenAI-совместимых провайдеров.
+
+В Claude используются безопасные короткие алиасы с префиксом провайдера:
+
+```text
+anthropic-claude-sonnet-4-5
+openai-gpt-4o
+reformboss-glm-5.3-prime
+```
+
+Посмотреть зарегистрированные модели через API:
+
+```bash
+curl "$API_URL/v1/models" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Ответ содержит имя алиаса, провайдера, протокол и адрес API, но никогда не содержит ключи.
+
+### Добавление Anthropic-провайдера
+
+Подключитесь по SSH и выполните:
+
+```bash
+read -rsp "Ключ Anthropic: " KEY; echo
+printf "%s" "$KEY" | sudo -u user /data/infra/litellm/providerctl.py add anthropic \
+  --protocol anthropic \
+  --api-base https://api.anthropic.com \
+  --env-key ANTHROPIC_PROVIDER_API_KEY \
+  --key-stdin \
+  claude-sonnet-4-5
+unset KEY
+```
+
+После этого появится алиас:
+
+```text
+anthropic-claude-sonnet-4-5
+```
+
+### Добавление OpenAI-провайдера
+
+```bash
+read -rsp "Ключ OpenAI: " KEY; echo
+printf "%s" "$KEY" | sudo -u user /data/infra/litellm/providerctl.py add openai \
+  --protocol openai \
+  --api-base https://api.openai.com/v1 \
+  --env-key OPENAI_PROVIDER_API_KEY \
+  --key-stdin \
+  gpt-4o
+unset KEY
+```
+
+Появится алиас:
+
+```text
+openai-gpt-4o
+```
+
+Для OpenAI-совместимого провайдера укажите его адрес `/v1`, например:
+
+```bash
+read -rsp "Ключ провайдера: " KEY; echo
+printf "%s" "$KEY" | sudo -u user /data/infra/litellm/providerctl.py add myprovider \
+  --protocol openai \
+  --api-base https://provider.example.com/v1 \
+  --env-key MYPROVIDER_API_KEY \
+  --key-stdin \
+  model-name
+unset KEY
+```
+
+Получится алиас `myprovider-model-name`.
+
+### Выбор модели через API
+
+```bash
+curl -X POST "$API_URL/v1/models/select" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"openai-gpt-4o"}'
+```
+
+Ответ сообщает `new_claude_session_required: true`. Это значит, что текущая Claude-сессия уже запущена со старой моделью. После выбора остановите старую сессию командой `exit` через терминал, затем запустите Claude заново через `/v1/claude/start`.
+
+Ключи провайдеров хранятся только в `/data/infra/litellm/proxy.env`. В GitHub и ответах API они не публикуются.
+
 ## 6. Запуск Claude Code
 
 Запустить persistent-сессию Claude:

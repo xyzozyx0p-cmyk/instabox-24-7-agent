@@ -22,6 +22,8 @@ BEARER = HTTPBearer(auto_error=False)
 TOKEN = os.environ.get("CONTROL_API_TOKEN", "")
 WORKSPACE = Path(os.environ.get("CONTROL_WORKSPACE", "/data/workspace"))
 DEFAULT_PROJECT = os.environ.get("CONTROL_PROJECT", str(WORKSPACE / "instabox-24-7-agent"))
+PROVIDER_REGISTRY = Path(os.environ.get("PROVIDER_REGISTRY", "/data/infra/litellm/providers.json"))
+CLAUDE_SETTINGS = Path(os.environ.get("CLAUDE_SETTINGS", "/data/home/.claude/settings.json"))
 MAX_MESSAGE = 32_000
 SESSION_RE = re.compile(r"^[a-zA-Z0-9_-]{1,48}$")
 AUTH_COOKIE = "control_session"
@@ -41,6 +43,10 @@ class CommandRequest(BaseModel):
 class SessionRequest(BaseModel):
     session: str = Field(default="terminal", pattern=r"^[a-zA-Z0-9_-]{1,48}$")
     cwd: str | None = None
+
+
+class ModelSelectRequest(BaseModel):
+    model: str = Field(min_length=2, max_length=160, pattern=r"^[a-zA-Z0-9._:-]+$")
 
 
 def require_token(request: Request, credentials: HTTPAuthorizationCredentials | None = Depends(BEARER)) -> None:
@@ -76,6 +82,22 @@ def safe_file_path(relative_path: str) -> Path:
     if candidate != workspace and workspace not in candidate.parents:
         raise HTTPException(status_code=400, detail="path must be under CONTROL_WORKSPACE")
     return candidate
+
+
+def registered_models() -> list[dict[str, Any]]:
+    if not PROVIDER_REGISTRY.exists():
+        return []
+    data = json.loads(PROVIDER_REGISTRY.read_text(encoding="utf-8"))
+    return [
+        {
+            "alias": model["alias"],
+            "provider": provider["name"],
+            "protocol": provider["protocol"],
+            "api_base": provider["api_base"],
+        }
+        for provider in data.get("providers", [])
+        for model in provider.get("models", [])
+    ]
 
 
 def tmux(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -155,6 +177,31 @@ async def status() -> dict[str, Any]:
         "sessions": sessions,
         "claude_installed": Path(os.path.expanduser("~/.local/bin/claude")).exists(),
     }
+
+
+@APP.get("/v1/models", dependencies=[Depends(require_token)])
+async def models() -> dict[str, Any]:
+    current = None
+    if CLAUDE_SETTINGS.exists():
+        try:
+            current = json.loads(CLAUDE_SETTINGS.read_text(encoding="utf-8")).get("env", {}).get("ANTHROPIC_MODEL")
+        except (OSError, ValueError, TypeError):
+            current = None
+    return {"ok": True, "current": current, "models": registered_models()}
+
+
+@APP.post("/v1/models/select", dependencies=[Depends(require_token)])
+async def select_model(request: ModelSelectRequest) -> dict[str, Any]:
+    aliases = {item["alias"] for item in registered_models()}
+    if request.model not in aliases:
+        raise HTTPException(status_code=404, detail="model alias not registered")
+    settings = json.loads(CLAUDE_SETTINGS.read_text(encoding="utf-8")) if CLAUDE_SETTINGS.exists() else {}
+    settings.setdefault("env", {})["ANTHROPIC_MODEL"] = request.model
+    temp = CLAUDE_SETTINGS.with_suffix(".tmp")
+    temp.write_text(json.dumps(settings, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    os.chmod(temp, 0o600)
+    os.replace(temp, CLAUDE_SETTINGS)
+    return {"ok": True, "model": request.model, "new_claude_session_required": True}
 
 
 @APP.get("/v1/files", dependencies=[Depends(require_token)])
