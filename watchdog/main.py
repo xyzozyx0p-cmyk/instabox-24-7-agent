@@ -38,6 +38,7 @@ STATE_DIR = Path(env("STATE_DIR", "./state"))
 PROGRESS_FILE = Path(env("PROGRESS_FILE", str(STATE_DIR / "progress.json")))
 PORT = int(env("PORT", "10000"))
 STATUS_TOKEN = env("WATCHDOG_STATUS_TOKEN")
+AUTO_START_STOPPED = env("AUTO_START_STOPPED", "true").lower() == "true"
 
 
 def now() -> str:
@@ -135,10 +136,15 @@ def check_once() -> None:
     logging.info("machine=%s state=%s", machine_target(), state)
     save_event({"kind": "liveness", "state": state})
 
-    if str(state).lower() == "paused":
-        logging.warning("machine is paused; requesting official resume")
+    normalized_state = str(state).lower()
+    if normalized_state in {"paused", "suspended"}:
+        logging.warning("machine is %s; requesting official resume", normalized_state)
         result = resume_machine()
         save_event({"kind": "anti_sleep", "action": "resume", "result": result})
+    elif normalized_state == "stopped" and AUTO_START_STOPPED:
+        logging.warning("machine is stopped; requesting official start")
+        result = start_machine()
+        save_event({"kind": "anti_sleep", "action": "start", "result": result})
 
     age = progress_age()
     if age is None:
@@ -164,6 +170,7 @@ class HealthHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
             try:
+                check_once()
                 machine = get_machine()
                 body = json.dumps({
                     "ok": True,

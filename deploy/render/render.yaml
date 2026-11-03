@@ -23,3 +23,7 @@ services:
         value: /var/lib/instabox-watchdog/progress.json
       - key: STATE_DIR
         value: /var/lib/instabox-watchdog
+      - key: AUTO_START_STOPPED
+        value: "true"
+      - key: WATCHDOG_STATUS_TOKEN
+        sync: false
