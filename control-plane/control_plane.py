@@ -12,7 +12,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
@@ -23,6 +24,7 @@ WORKSPACE = Path(os.environ.get("CONTROL_WORKSPACE", "/data/workspace"))
 DEFAULT_PROJECT = os.environ.get("CONTROL_PROJECT", str(WORKSPACE / "instabox-24-7-agent"))
 MAX_MESSAGE = 32_000
 SESSION_RE = re.compile(r"^[a-zA-Z0-9_-]{1,48}$")
+AUTH_COOKIE = "control_session"
 
 
 class MessageRequest(BaseModel):
@@ -41,8 +43,9 @@ class SessionRequest(BaseModel):
     cwd: str | None = None
 
 
-def require_token(credentials: HTTPAuthorizationCredentials | None = Depends(BEARER)) -> None:
-    if not TOKEN or credentials is None or not secrets.compare_digest(credentials.credentials, TOKEN):
+def require_token(request: Request, credentials: HTTPAuthorizationCredentials | None = Depends(BEARER)) -> None:
+    supplied = credentials.credentials if credentials else request.cookies.get(AUTH_COOKIE)
+    if not TOKEN or not supplied or not secrets.compare_digest(supplied, TOKEN):
         raise HTTPException(status_code=401, detail="unauthorized")
 
 
@@ -101,6 +104,36 @@ def capture(name: str, lines: int = 300) -> str:
 @APP.get("/healthz")
 async def healthz() -> dict[str, Any]:
     return {"ok": True, "service": "claude-control-plane"}
+
+
+@APP.get("/", response_class=HTMLResponse)
+async def login_page() -> str:
+    return """<!doctype html><html><head><meta charset=utf-8><title>Claude Control Plane</title>
+<style>body{font:16px system-ui;max-width:520px;margin:10vh auto;padding:24px;background:#111;color:#eee}input,button{font:inherit;padding:10px;margin-top:8px;width:100%;box-sizing:border-box}button{cursor:pointer}#msg{min-height:24px;color:#f88}</style></head>
+<body><h1>Claude Control Plane</h1><p>Введите API-токен. Сервер проверит его до создания сессии.</p>
+<form id=f><input id=t type=password autocomplete=current-password placeholder="CONTROL_API_TOKEN" required><button>Войти</button></form><p id=msg></p>
+<script>f.onsubmit=async e=>{e.preventDefault();msg.textContent='Проверка...';let r=await fetch('/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:t.value})});if(r.ok)location='/docs';else msg.textContent='Неверный токен (401)';}</script></body></html>"""
+
+
+@APP.post("/auth/login")
+async def login(request: Request) -> JSONResponse:
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="invalid JSON") from exc
+    supplied = str(payload.get("token", ""))
+    if not TOKEN or not secrets.compare_digest(supplied, TOKEN):
+        raise HTTPException(status_code=401, detail="invalid credentials")
+    response = JSONResponse({"ok": True})
+    response.set_cookie(AUTH_COOKIE, TOKEN, max_age=86400, httponly=True, secure=True, samesite="strict")
+    return response
+
+
+@APP.post("/auth/logout")
+async def logout() -> JSONResponse:
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(AUTH_COOKIE)
+    return response
 
 
 @APP.get("/v1/status", dependencies=[Depends(require_token)])
@@ -167,7 +200,8 @@ async def command(request: CommandRequest) -> dict[str, Any]:
 
 async def ws_auth(websocket: WebSocket) -> None:
     query_token = websocket.query_params.get("token")
-    if query_token and TOKEN and secrets.compare_digest(query_token, TOKEN):
+    cookie_token = websocket.cookies.get(AUTH_COOKIE)
+    if (query_token and TOKEN and secrets.compare_digest(query_token, TOKEN)) or (cookie_token and TOKEN and secrets.compare_digest(cookie_token, TOKEN)):
         await websocket.accept()
         return
     await websocket.accept()
