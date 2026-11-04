@@ -51,6 +51,14 @@ def render_config(data: dict) -> None:
         protocol = provider["protocol"]
         base = provider.get("api_base", "").rstrip("/")
         env_key = provider["env_key"]
+        # This lets Claude Code select any provider model as provider/model.
+        lines += [
+            f"  - model_name: {q(provider['name'] + '/*')}",
+            "    litellm_params:",
+            f"      model: {q(protocol + '/*')}",
+            f"      api_base: {q(base)}",
+            f"      api_key: {q('os.environ/' + env_key)}",
+        ]
         for model in provider.get("models", []):
             lines += [
                 f"  - model_name: {q(model['alias'])}",

@@ -88,16 +88,24 @@ def registered_models() -> list[dict[str, Any]]:
     if not PROVIDER_REGISTRY.exists():
         return []
     data = json.loads(PROVIDER_REGISTRY.read_text(encoding="utf-8"))
-    return [
-        {
-            "alias": model["alias"],
+    output = []
+    for provider in data.get("providers", []):
+        output.append({
+            "alias": provider["name"] + "/*",
             "provider": provider["name"],
             "protocol": provider["protocol"],
             "api_base": provider["api_base"],
-        }
-        for provider in data.get("providers", [])
-        for model in provider.get("models", [])
-    ]
+            "wildcard": True,
+        })
+        for model in provider.get("models", []):
+            output.append({
+                "alias": model["alias"],
+                "provider": provider["name"],
+                "protocol": provider["protocol"],
+                "api_base": provider["api_base"],
+                "wildcard": False,
+            })
+    return output
 
 
 def tmux(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:

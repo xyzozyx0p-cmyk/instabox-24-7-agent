@@ -256,6 +256,33 @@ unset KEY
 
 Получится алиас `myprovider-model-name`.
 
+### Выбор модели прямо внутри Claude Code
+
+Для универсального выбора включена wildcard-маршрутизация. Внутри уже запущенного Claude Code можно написать:
+
+```text
+/model reformboss/glm-5.3-prime
+/model openai/gpt-4o
+/model anthropic/claude-sonnet-4-5
+```
+
+Формат:
+
+```text
+/model имя-провайдера/точное-имя-модели
+```
+
+Так можно указать любую модель, которую поддерживает соответствующий провайдер, без предварительного добавления каждой модели в YAML. Например, все запросы `reformboss/*` идут через OpenAI-совместимый endpoint ReformBoss, а `anthropic/*` — через официальный Anthropic API.
+
+Также работают зарегистрированные алиасы через дефис:
+
+```text
+/model reformboss-glm-5.3-prime
+/model openai-gpt-4o
+```
+
+Чтобы модели провайдера появились в списке после ввода просто `/model`, в настройках Claude включён gateway discovery. Claude Code получает список через LiteLLM `/v1/models`. Для этой функции нужна актуальная версия Claude Code; если список не обновился, перезапустите Claude-сессию.
+
 ### Выбор модели через API
 
 ```bash
