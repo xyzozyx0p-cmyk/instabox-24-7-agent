@@ -23,7 +23,9 @@ TOKEN = os.environ.get("CONTROL_API_TOKEN", "")
 WORKSPACE = Path(os.environ.get("CONTROL_WORKSPACE", "/data/workspace"))
 DEFAULT_PROJECT = os.environ.get("CONTROL_PROJECT", str(WORKSPACE / "instabox-24-7-agent"))
 PROVIDER_REGISTRY = Path(os.environ.get("PROVIDER_REGISTRY", "/data/infra/litellm/providers.json"))
+MODEL_CACHE = Path(os.environ.get("MODEL_CACHE", "/data/infra/litellm/available-models.json"))
 CLAUDE_SETTINGS = Path(os.environ.get("CLAUDE_SETTINGS", "/data/home/.claude/settings.json"))
+MODEL_SYNC = Path(os.environ.get("MODEL_SYNC", "/data/infra/litellm/model_sync.py"))
 MAX_MESSAGE = 32_000
 SESSION_RE = re.compile(r"^[a-zA-Z0-9_-]{1,48}$")
 AUTH_COOKIE = "control_session"
@@ -46,7 +48,7 @@ class SessionRequest(BaseModel):
 
 
 class ModelSelectRequest(BaseModel):
-    model: str = Field(min_length=2, max_length=160, pattern=r"^[a-zA-Z0-9._:-]+$")
+    model: str = Field(min_length=2, max_length=200, pattern=r"^[a-zA-Z0-9._:/-]+$")
 
 
 def require_token(request: Request, credentials: HTTPAuthorizationCredentials | None = Depends(BEARER)) -> None:
@@ -105,7 +107,54 @@ def registered_models() -> list[dict[str, Any]]:
                 "api_base": provider["api_base"],
                 "wildcard": False,
             })
+    if MODEL_CACHE.exists():
+        try:
+            cached = json.loads(MODEL_CACHE.read_text(encoding="utf-8")).get("providers", {})
+            for provider in data.get("providers", []):
+                for model_id in cached.get(provider["name"], []):
+                    output.append({
+                        "alias": provider["name"] + "/" + model_id,
+                        "provider": provider["name"],
+                        "protocol": provider["protocol"],
+                        "api_base": provider["api_base"],
+                        "wildcard": False,
+                        "discovered": True,
+                    })
+        except (OSError, ValueError, TypeError):
+            pass
     return output
+
+
+async def sync_provider_models() -> dict[str, Any]:
+    if not MODEL_SYNC.exists():
+        return {"ok": False, "error": "model sync script not found"}
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run,
+            ["/usr/bin/python3", str(MODEL_SYNC)],
+            text=True,
+            capture_output=True,
+            timeout=45,
+            check=False,
+        )
+        payload = json.loads(result.stdout.strip().splitlines()[-1]) if result.stdout.strip() else {}
+        if result.returncode != 0:
+            return {"ok": False, "error": "model sync failed", "details": payload}
+        if payload.get("changed"):
+            restart = await asyncio.to_thread(
+                subprocess.run,
+                ["sudo", "systemctl", "restart", "litellm-local.service"],
+                text=True,
+                capture_output=True,
+                timeout=45,
+                check=False,
+            )
+            if restart.returncode != 0:
+                return {"ok": False, "error": "LiteLLM restart failed", "details": restart.stderr[-500:]}
+            await asyncio.sleep(3)
+        return {"ok": True, **payload}
+    except Exception as exc:
+        return {"ok": False, "error": type(exc).__name__}
 
 
 def tmux(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -263,6 +312,7 @@ async def create_terminal(request: SessionRequest) -> dict[str, Any]:
 
 @APP.post("/v1/claude/start", dependencies=[Depends(require_token)])
 async def start_claude(request: SessionRequest | None = None) -> dict[str, Any]:
+    sync_result = await sync_provider_models()
     request = request or SessionRequest(session="claude")
     session = validate_session(request.session or "claude")
     cwd = safe_cwd(request.cwd)
@@ -270,7 +320,7 @@ async def start_claude(request: SessionRequest | None = None) -> dict[str, Any]:
     if not has_claude_process(session):
         tmux("send-keys", "-t", session, "-l", "claude")
         tmux("send-keys", "-t", session, "Enter")
-    return {"ok": True, "session": session, "cwd": cwd, "output": capture(session, 80)}
+    return {"ok": True, "session": session, "cwd": cwd, "model_sync": sync_result, "output": capture(session, 80)}
 
 
 def has_claude_process(session: str) -> bool:
