@@ -91,15 +91,22 @@ def registered_models() -> list[dict[str, Any]]:
         return []
     data = json.loads(PROVIDER_REGISTRY.read_text(encoding="utf-8"))
     output = []
+    cached = None
+    if MODEL_CACHE.exists():
+        try:
+            cached = json.loads(MODEL_CACHE.read_text(encoding="utf-8")).get("providers", {})
+        except (OSError, ValueError, TypeError):
+            cached = None
     for provider in data.get("providers", []):
-        output.append({
-            "alias": provider["name"] + "/*",
-            "provider": provider["name"],
-            "protocol": provider["protocol"],
-            "api_base": provider["api_base"],
-            "wildcard": True,
-        })
-        for model in provider.get("models", []):
+        if cached is None or not cached.get(provider["name"]):
+            output.append({
+                "alias": provider["name"] + "/*",
+                "provider": provider["name"],
+                "protocol": provider["protocol"],
+                "api_base": provider["api_base"],
+                "wildcard": True,
+            })
+        for model in provider.get("models", []) if cached is None else []:
             output.append({
                 "alias": model["alias"],
                 "provider": provider["name"],

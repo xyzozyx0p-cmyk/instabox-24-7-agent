@@ -18,6 +18,20 @@ BLOCKED = (
     "realtime", "sora", "computer-use", "computer_use", "container", "music",
     "video", "speech",
 )
+ALLOWED_MODELS = {
+    "kr/claude-sonnet-4.5", "agnes-3.0-flash", "intern-s2", "hy4-preview",
+    "SenseNova-6.8-Flash-Lite", "cx/gpt-6-luna", "LongCat-2.5-Preview",
+    "z-ai/glm-5.3-flash", "perchai-minimax-m3", "zai-org/GLM-5.3", "auto",
+    "kimi-k2.7-code", "kimi-k3", "glm-5.3-prime", "glm-5.3-flash", "glm-5.3",
+    "deepseek-v4-flash", "deepseek-v4.1-flash-1017-uncensored",
+    "deepseek-v4.1-flash-uncensored", "deepseek-v4.1-flash",
+    "deepseek-v4.1-flash-1017", "deepseek-ai/DeepSeek-V4.1-Flash",
+    "Qwen3.8-Flash-Next", "qwen3.8-max-0902", "qwen/qwen3.8-max:free",
+    "qwen3.8-27b", "qwen3.8-flash", "qwen3-vl-plus", "qwen3.7-max",
+    "qwen3.8-max", "qwen-max", "qwen-plus", "gemini-4-argon", "gemini-auto",
+    "grok-4.7", "grok-4.6", "grok-chat-fast", "grok-4.5", "gpt-6.1-terra",
+    "gpt-5.6-luna", "gpt-6-luna", "gpt-6-sol", "claude-haiku-5-5",
+}
 
 
 def env_values() -> dict[str, str]:
@@ -40,14 +54,10 @@ def fetch_models(provider: dict, values: dict[str, str]) -> list[str]:
     url = provider["api_base"].rstrip("/") + "/models"
     request = urllib.request.Request(url, headers={"Authorization": "Bearer " + key})
     with urllib.request.urlopen(request, timeout=25) as response:
-        payload = json.load(response)
-    rows = payload.get("data", payload if isinstance(payload, list) else [])
-    output = []
-    for row in rows:
-        model_id = str(row.get("id", "")) if isinstance(row, dict) else str(row)
-        if model_id and not any(word in model_id.lower() for word in BLOCKED):
-            output.append(model_id)
-    return sorted(set(output), key=str.lower)
+        json.load(response)  # Validate the provider response and the supplied key.
+    # The user-maintained allowlist is authoritative. The provider catalog is often
+    # incomplete or uses a different namespace, so do not silently drop requested IDs.
+    return sorted(ALLOWED_MODELS, key=str.lower)
 
 
 def write_config(registry: dict, discovered: dict[str, list[str]]) -> None:
@@ -72,14 +82,6 @@ def write_config(registry: dict, discovered: dict[str, list[str]]) -> None:
                 f"  - model_name: {quote(name + '/' + model_id)}",
                 "    litellm_params:",
                 f"      model: {quote(protocol + '/' + model_id)}",
-                f"      api_base: {quote(base)}",
-                f"      api_key: {quote('os.environ/' + env_key)}",
-            ]
-        for model in provider.get("models", []):
-            lines += [
-                f"  - model_name: {quote(model['alias'])}",
-                "    litellm_params:",
-                f"      model: {quote(protocol + '/' + model['id'])}",
                 f"      api_base: {quote(base)}",
                 f"      api_key: {quote('os.environ/' + env_key)}",
             ]
