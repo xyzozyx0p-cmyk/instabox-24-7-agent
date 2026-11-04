@@ -1,0 +1,9 @@
+[Unit]
+Description=Ensure persistent Claude Code session is running
+After=claude-control-plane.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/claude-keepalive.sh

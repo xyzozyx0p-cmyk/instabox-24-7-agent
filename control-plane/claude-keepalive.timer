@@ -1,0 +1,12 @@
+[Unit]
+Description=Keep Claude Code session alive
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+RandomizedDelaySec=20s
+Persistent=true
+Unit=claude-keepalive.service
+
+[Install]
+WantedBy=timers.target
