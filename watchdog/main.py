@@ -185,42 +185,55 @@ def stop_handler(_signum: int, _frame: object) -> None:
 
 
 class HealthHandler(BaseHTTPRequestHandler):
+    def authorized(self) -> bool:
+        return bool(STATUS_TOKEN) and self.headers.get("Authorization") == f"Bearer {STATUS_TOKEN}"
+
+    def send_json(self, body: dict, status: int = 200) -> None:
+        payload = json.dumps(body, ensure_ascii=False).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/status":
-            if not STATUS_TOKEN or self.headers.get("Authorization") != f"Bearer {STATUS_TOKEN}":
-                self.send_response(401)
-                self.end_headers()
+            if not self.authorized():
+                self.send_json({"ok": False, "error": "unauthorized"}, 401)
                 return
             try:
                 check_once()
                 machine = get_machine()
-                body = json.dumps({
+                self.send_json({
                     "ok": True,
                     "service": "instabox-watchdog",
                     "machine": machine_target(),
                     "state": machine.get("state", "unknown"),
                     "runtime_ready": bool(machine.get("runtime", {}).get("ready", False)),
-                }).encode()
-                status = 200
+                })
             except Exception as exc:  # pragma: no cover - runtime API errors
-                body = json.dumps({"ok": False, "service": "instabox-watchdog", "error": type(exc).__name__}).encode()
-                status = 503
-            self.send_response(status)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+                self.send_json({"ok": False, "service": "instabox-watchdog", "error": type(exc).__name__}, 503)
             return
         if self.path not in {"/", "/healthz"}:
-            self.send_response(404)
-            self.end_headers()
+            self.send_json({"ok": False, "error": "not_found"}, 404)
             return
-        body = json.dumps({"ok": True, "service": "instabox-watchdog", "configured": bool(API_KEY and (MACHINE_ID or MACHINE_NAME))}).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        self.send_json({"ok": True, "service": "instabox-watchdog", "configured": bool(API_KEY and (MACHINE_ID or MACHINE_NAME))})
+
+    def do_POST(self) -> None:  # noqa: N802
+        if self.path not in {"/control/resume", "/control/restart"}:
+            self.send_json({"ok": False, "error": "not_found"}, 404)
+            return
+        if not self.authorized():
+            self.send_json({"ok": False, "error": "unauthorized"}, 401)
+            return
+        try:
+            action = "resume" if self.path.endswith("/resume") else "restart"
+            control(action)
+            machine = get_machine()
+            self.send_json({"ok": True, "action": action, "machine": machine_target(), "state": machine.get("state", "unknown")})
+        except Exception as exc:  # pragma: no cover - runtime API errors
+            logging.exception("control endpoint failed: %s", exc)
+            self.send_json({"ok": False, "error": type(exc).__name__}, 503)
 
     def log_message(self, _format: str, *_args: object) -> None:
         return
