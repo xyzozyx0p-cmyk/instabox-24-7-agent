@@ -79,20 +79,42 @@ def get_machine() -> dict:
     return request("GET", f"/v1/machines/{machine_target()}")
 
 
+def lifecycle_target() -> str:
+    """Prefer the canonical machine ID returned by GET, then fall back to configured name."""
+    machine = get_machine()
+    for key in ("id", "machine_id", "machineId"):
+        value = machine.get(key)
+        if value:
+            return str(value)
+    return machine_target()
+
+
+def lifecycle_request(action: str) -> dict:
+    target = lifecycle_target()
+    try:
+        return request("POST", f"/v1/machines/{target}/{action}", {})
+    except urllib.error.HTTPError as exc:
+        # Some Instabox API versions accept the display name for GET but require
+        # the canonical ID for lifecycle operations, while older versions do the reverse.
+        if exc.code == 404 and target != machine_target():
+            return request("POST", f"/v1/machines/{machine_target()}/{action}", {})
+        raise
+
+
 def resume_machine() -> dict:
-    return request("POST", f"/v1/machines/{machine_target()}/resume", {})
+    return lifecycle_request("resume")
 
 
 def start_machine() -> dict:
-    return request("POST", f"/v1/machines/{machine_target()}/start", {})
+    return lifecycle_request("start")
 
 
 def stop_machine() -> dict:
-    return request("POST", f"/v1/machines/{machine_target()}/stop", {})
+    return lifecycle_request("stop")
 
 
 def suspend_machine() -> dict:
-    return request("POST", f"/v1/machines/{machine_target()}/suspend", {})
+    return lifecycle_request("suspend")
 
 
 def control(action: str) -> int:
